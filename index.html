@@ -1,1 +1,669 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
+  <title>Gia phả - Chế độ đơn giản</title>
 
+  <!-- D3.js & jsPDF (CDN) -->
+  <script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
+
+  <style>
+    :root {
+      --font: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+      --text: #111;
+      --bg: #fff;
+      --muted: #606060;
+      --primary: #0d47a1;
+      --male: #1976d2;
+      --female: #d81b60;
+      --spouse-in: #6a1b9a; /* dâu */
+      --spouse-out: #e65100; /* rể */
+      --deceased: #616161;
+      --border: #e0e0e0;
+      --radius: 12px;
+      --space: 12px;
+      --btn-h: 48px;
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      margin: 0; font-family: var(--font); color: var(--text); background: var(--bg);
+      font-size: 18px; line-height: 1.4;
+    }
+    header {
+      padding: 12px 16px; background: var(--primary); color: #fff;
+      display: flex; align-items: center; justify-content: space-between; gap: 12px;
+      position: sticky; top: 0; z-index: 10;
+    }
+    header h1 { margin: 0; font-size: 20px; }
+    .toolbar {
+      display: flex; flex-wrap: wrap; gap: var(--space);
+      padding: 10px 12px; border-bottom: 1px solid var(--border); background: #fafafa;
+    }
+    button, input {
+      height: var(--btn-h); font-size: 18px; border-radius: var(--radius);
+      border: 1.5px solid #ccc; padding: 0 14px; background: #fff; color: var(--text);
+    }
+    button.primary { background: var(--primary); color: #fff; border-color: var(--primary); }
+    button.danger { background: #c62828; color: #fff; border-color: #c62828; }
+    input { min-width: 260px; flex: 1; }
+    .wrap { height: calc(100dvh - 140px); position: relative; overflow: hidden; background: #fff; }
+    svg#canvas { width: 100%; height: 100%; touch-action: none; display: block; }
+
+    /* Node style – thẻ lớn, dễ đọc */
+    .node rect {
+      fill: #fff; stroke-width: 2px; rx: 12px;
+      filter: drop-shadow(0 1px 1px rgba(0,0,0,0.04));
+    }
+    .node .name { font-weight: 700; font-size: 16px; }
+    .node .meta { fill: var(--muted); font-size: 14px; }
+    .badge {
+      font-size: 12px; fill: #fff;
+    }
+
+    /* Legend & helper text */
+    .legend {
+      padding: 8px 12px; color: #333; font-size: 16px;
+      display: flex; gap: 16px; flex-wrap: wrap; align-items: center; border-top: 1px solid var(--border);
+    }
+    .dot { display: inline-block; width: 14px; height: 14px; border-radius: 3px; margin-right: 6px; }
+
+    /* Bottom help (“?”) */
+    .help {
+      position: fixed; right: 12px; bottom: 12px; z-index: 15;
+      background: #fff; border: 1px solid var(--border); border-radius: 12px; padding: 12px; font-size: 16px;
+      box-shadow: 0 6px 16px rgba(0,0,0,0.08);
+      max-width: min(92vw, 460px);
+    }
+    .help h3 { margin: 0 0 8px 0; font-size: 18px; }
+    .help p { margin: 6px 0; color: #333; }
+    .help .close { position: absolute; top: 6px; right: 10px; border: none; background: transparent; font-size: 22px; }
+
+    @media (min-width: 900px) {
+      body { font-size: 18px; }
+      header h1 { font-size: 22px; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Gia phả</h1>
+    <div style="display:flex; gap:8px;">
+      <button id="btnTree">Sơ đồ cây</button>
+      <button id="btnMindmap" class="primary">Sơ đồ tư duy</button>
+    </div>
+  </header>
+
+  <div class="toolbar">
+    <input id="q" placeholder="Tìm tên (không dấu cũng được)" aria-label="Tìm tên" />
+    <button id="btnSearch">Tìm</button>
+    <button id="btnZoomIn">Phóng to</button>
+    <button id="btnZoomOut">Thu nhỏ</button>
+    <button id="btnCenter">Về giữa</button>
+    <button id="btnPng">Tải ảnh</button>
+    <button id="btnPdf">Tải PDF</button>
+  </div>
+
+  <div class="wrap">
+    <svg id="canvas" role="img" aria-label="Sơ đồ gia phả"></svg>
+  </div>
+
+  <div class="legend">
+    <span><span class="dot" style="background: var(--male)"></span>Nam</span>
+    <span><span class="dot" style="background: var(--female)"></span>Nữ</span>
+    <span><span class="dot" style="background: var(--spouse-in)"></span>Dâu</span>
+    <span><span class="dot" style="background: var(--spouse-out)"></span>Rể</span>
+    <span><span class="dot" style="background: var(--deceased)"></span>Đã mất</span>
+  </div>
+
+  <div id="help" class="help" hidden>
+    <button class="close" aria-label="Đóng" onclick="document.getElementById('help').hidden=true">×</button>
+    <h3>Hướng dẫn nhanh</h3>
+    <p>• Dùng hai ngón tay để <strong>phóng to/thu nhỏ</strong>. Kéo để <strong>di chuyển sơ đồ</strong>.</p>
+    <p>• Gõ tên (không dấu cũng được), bấm <strong>Tìm</strong>.</p>
+    <p>• Bấm <strong>Tải ảnh</strong> để chia sẻ, <strong>Tải PDF</strong> để in.</p>
+  </div>
+
+  <script>
+    /*******************
+     * CẤU HÌNH NHANH *
+     *******************/
+    const CONFIG = {
+      defaultView: 'mindmap',      // 'mindmap' | 'tree'
+      showOnlyBirthYear: true,     // chỉ hiển thị năm sinh (công khai)
+      rootIds: null,               // mảng id gốc huyết thống (nếu null sẽ tự tìm người không có cha/mẹ)
+      node: { w: 210, h: 64 },
+      spacing: { dx: 90, dy: 260 }, // dùng cho Tree
+      radial: { radiusStep: 110 }  // dùng cho Mindmap
+    };
+
+    /**************
+     * TIỆN ÍCH   *
+     **************/
+    const normalize = (s) => (s || '').toLowerCase().normalize('NFD').replace(/\p{Diacritic}/gu, '');
+    const year = (d) => {
+      if (!d) return '';
+      const dt = new Date(d);
+      const y = dt.getUTCFullYear();
+      return isFinite(y) ? String(y) : '';
+    };
+
+    function fitSvgToGroup(svg, g, padding = 60) {
+      const b = g.node().getBBox();
+      const w = Math.max(320, b.width + padding * 2);
+      const h = Math.max(480, b.height + padding * 2);
+      svg.attr('viewBox', [b.x - padding, b.y - padding, w, h]);
+    }
+
+    function computeClassification(people, edges, spouses, rootIds) {
+      const byId = new Map(people.map(p => [p.id, p]));
+      const children = new Map();
+      const parents = new Map();
+      edges.forEach(e => {
+        (children.get(e.parent_id) ?? children.set(e.parent_id, []).get(e.parent_id)).push(e.child_id);
+        (parents.get(e.child_id) ?? parents.set(e.child_id, []).get(e.child_id)).push(e.parent_id);
+      });
+      // roots: không có cha/mẹ
+      let roots = rootIds && rootIds.length ? rootIds : people.filter(p => !parents.has(p.id)).map(p => p.id);
+
+      // BFS để lấy tập huyết thống (inBloodline)
+      const inBlood = new Set();
+      const q = [...roots];
+      while (q.length) {
+        const id = q.shift();
+        if (inBlood.has(id)) continue;
+        inBlood.add(id);
+        (children.get(id) || []).forEach(c => q.push(c));
+      }
+
+      // map spouse
+      const spMap = new Map();
+      for (const s of spouses) {
+        (spMap.get(s.person_a) ?? spMap.set(s.person_a, []).get(s.person_a)).push(s.person_b);
+        (spMap.get(s.person_b) ?? spMap.set(s.person_b, []).get(s.person_b)).push(s.person_a);
+      }
+
+      // nhãn
+      const label = new Map(); // id -> 'dau' | 're' | 'dead'
+      for (const p of people) if (p.death) label.set(p.id, 'dead');
+
+      for (const p of people) {
+        for (const sId of (spMap.get(p.id) || [])) {
+          const pIn = inBlood.has(p.id);
+          const sIn = inBlood.has(sId);
+          if (!pIn && sIn) {
+            const me = byId.get(p.id);
+            if (me?.gender === 'F') label.set(p.id, 'dau');
+            else if (me?.gender === 'M') label.set(p.id, 're');
+          }
+          if (pIn && !sIn) {
+            const sp = byId.get(sId);
+            if (sp?.gender === 'F') label.set(sId, 'dau');
+            else if (sp?.gender === 'M') label.set(sId, 're');
+          }
+        }
+      }
+      return { inBlood, label, parents, children };
+    }
+
+    function toEdges(people) {
+      // Từ people[].parents tạo edge parent_child
+      const edges = [];
+      for (const p of people) {
+        for (const pid of (p.parents || [])) edges.push({ parent_id: pid, child_id: p.id });
+      }
+      // spouses: cặp (song phương)
+      const sp = [];
+      const seen = new Set();
+      for (const p of people) {
+        for (const s of (p.spouses || [])) {
+          const a = p.id, b = s, k = a < b ? a + '|' + b : b + '|' + a;
+          if (!seen.has(k)) { seen.add(k); sp.push({ person_a: a, person_b: b }); }
+        }
+      }
+      return { edges, spouses: sp };
+    }
+
+    function buildTreeData(people, edges) {
+      const byId = new Map(people.map(p => [p.id, p]));
+      const children = new Map();
+      const parents = new Map();
+      for (const e of edges) {
+        (children.get(e.parent_id) ?? children.set(e.parent_id, []).get(e.parent_id)).push(e.child_id);
+        (parents.get(e.child_id) ?? parents.set(e.child_id, []).get(e.child_id)).push(e.parent_id);
+      }
+      const roots = people.filter(p => !parents.has(p.id));
+      const mk = (id) => {
+        const p = byId.get(id);
+        return {
+          id: p.id,
+          name: p.name,
+          gender: p.gender,
+          birth: p.birth,
+          death: p.death,
+          children: (children.get(id) || []).map(mk)
+        };
+      };
+      if (roots.length === 1) return mk(roots[0].id);
+      return { id: 'root', name: 'Tổ tiên', gender: 'U', children: roots.map(r => mk(r.id)) };
+    }
+
+    function buildRadialHierarchy(treeData) {
+      // D3 expects hierarchy
+      return d3.hierarchy(treeData, d => d.children);
+    }
+
+    /*******************
+     * RENDERER MINDMAP
+     *******************/
+    function renderMindmap(svg, people, edges, spouses, options, classification) {
+      svg.selectAll('*').remove();
+
+      const g = svg.append('g');
+      const { node } = options;
+      const radiusStep = CONFIG.radial.radiusStep;
+
+      const root = buildRadialHierarchy(buildTreeData(people, edges));
+      const tree = d3.tree().size([2 * Math.PI, (root.height + 2) * radiusStep]);
+      tree(root);
+
+      // convert to x,y
+      const point = (d) => {
+        const r = d.y, a = d.x - Math.PI / 2;
+        return [Math.cos(a) * r, Math.sin(a) * r];
+      };
+
+      // Links
+      g.append('g')
+        .attr('fill', 'none')
+        .attr('stroke', '#999')
+        .attr('stroke-width', 1.2)
+        .selectAll('path')
+        .data(root.links())
+        .join('path')
+        .attr('d', d3.linkRadial()
+          .angle(d => d.x)
+          .radius(d => d.y));
+
+      // Nodes
+      const nodes = g.append('g')
+        .selectAll('g')
+        .data(root.descendants())
+        .join('g')
+        .attr('transform', d => {
+          const [x, y] = point(d);
+          return `translate(${x},${y})`;
+        })
+        .attr('class', 'node');
+
+      // color border by gender
+      const borderColor = (d) => d.data.gender === 'F' ? 'var(--female)' : d.data.gender === 'M' ? 'var(--male)' : '#455a64';
+      const labelKind = (id) => classification.label.get(id); // 'dau'|'re'|'dead'|undefined
+
+      // draw rect centered
+      nodes.append('rect')
+        .attr('x', -node.w / 2)
+        .attr('y', -node.h / 2)
+        .attr('width', node.w)
+        .attr('height', node.h)
+        .attr('stroke', d => borderColor(d))
+        .attr('fill', '#fff');
+
+      nodes.append('text')
+        .attr('class', 'name')
+        .attr('text-anchor', 'middle')
+        .attr('dy', -4)
+        .text(d => d.data.name);
+
+      nodes.append('text')
+        .attr('class', 'meta')
+        .attr('text-anchor', 'middle')
+        .attr('dy', 16)
+        .text(d => {
+          // Chỉ hiển thị NĂM SINH cho công khai
+          return CONFIG.showOnlyBirthYear ? year(d.data.birth) : year(d.data.birth);
+        });
+
+      // badge
+      nodes.append('rect')
+        .filter(d => !!labelKind(d.data.id))
+        .attr('x', node.w / 2 - 50)
+        .attr('y', -node.h / 2 + 6)
+        .attr('width', 44)
+        .attr('height', 20)
+        .attr('rx', 10)
+        .attr('fill', d => {
+          const k = labelKind(d.data.id);
+          return k === 'dau' ? 'var(--spouse-in)' : k === 're' ? 'var(--spouse-out)' : 'var(--deceased)';
+        });
+
+      nodes.append('text')
+        .filter(d => !!labelKind(d.data.id))
+        .attr('class', 'badge')
+        .attr('x', node.w / 2 - 28)
+        .attr('y', -node.h / 2 + 21)
+        .attr('text-anchor', 'middle')
+        .text(d => {
+          const k = labelKind(d.data.id);
+          return k === 'dau' ? 'Dâu' : k === 're' ? 'Rể' : 'Đã mất';
+        });
+
+      // Zoom/pan
+      const zoom = d3.zoom().scaleExtent([0.4, 3]).on('zoom', (ev) => g.attr('transform', ev.transform));
+      svg.call(zoom);
+      fitSvgToGroup(svg, g);
+
+      return { root, group: g, zoom };
+    }
+
+    /***************
+     * RENDERER TREE
+     ***************/
+    function renderTree(svg, people, edges, spouses, options, classification) {
+      svg.selectAll('*').remove();
+      const g = svg.append('g').attr('transform', 'translate(40,40)');
+      const { node } = options;
+
+      const root = d3.hierarchy(buildTreeData(people, edges), d => d.children);
+      const treeLayout = d3.tree().nodeSize([CONFIG.spacing.dx, CONFIG.spacing.dy]);
+      treeLayout(root);
+
+      // Links
+      g.append('g')
+        .attr('fill', 'none')
+        .attr('stroke', '#999')
+        .attr('stroke-width', 1.2)
+        .selectAll('path')
+        .data(root.links())
+        .join('path')
+        .attr('d', d3.linkHorizontal()
+          .x(d => d.y)
+          .y(d => d.x));
+
+      // Nodes
+      const nodes = g.append('g')
+        .selectAll('g')
+        .data(root.descendants())
+        .join('g')
+        .attr('transform', d => `translate(${d.y},${d.x})`)
+        .attr('class', 'node');
+
+      const borderColor = (d) => d.data.gender === 'F' ? 'var(--female)' : d.data.gender === 'M' ? 'var(--male)' : '#455a64';
+      const labelKind = (id) => classification.label.get(id);
+
+      nodes.append('rect')
+        .attr('x', -CONFIG.node.w / 2)
+        .attr('y', -CONFIG.node.h / 2)
+        .attr('width', CONFIG.node.w)
+        .attr('height', CONFIG.node.h)
+        .attr('stroke', d => borderColor(d))
+        .attr('fill', '#fff');
+
+      nodes.append('text')
+        .attr('class', 'name')
+        .attr('text-anchor', 'middle')
+        .attr('dy', -4)
+        .text(d => d.data.name);
+
+      nodes.append('text')
+        .attr('class', 'meta')
+        .attr('text-anchor', 'middle')
+        .attr('dy', 16)
+        .text(d => CONFIG.showOnlyBirthYear ? year(d.data.birth) : year(d.data.birth));
+
+      nodes.append('rect')
+        .filter(d => !!labelKind(d.data.id))
+        .attr('x', CONFIG.node.w / 2 - 50)
+        .attr('y', -CONFIG.node.h / 2 + 6)
+        .attr('width', 44)
+        .attr('height', 20)
+        .attr('rx', 10)
+        .attr('fill', d => {
+          const k = labelKind(d.data.id);
+          return k === 'dau' ? 'var(--spouse-in)' : k === 're' ? 'var(--spouse-out)' : 'var(--deceased)';
+        });
+
+      nodes.append('text')
+        .filter(d => !!labelKind(d.data.id))
+        .attr('class', 'badge')
+        .attr('x', CONFIG.node.w / 2 - 28)
+        .attr('y', -CONFIG.node.h / 2 + 21)
+        .attr('text-anchor', 'middle')
+        .text(d => {
+          const k = labelKind(d.data.id);
+          return k === 'dau' ? 'Dâu' : k === 're' ? 'Rể' : 'Đã mất';
+        });
+
+      // Zoom/pan
+      const zoom = d3.zoom().scaleExtent([0.4, 2.5]).on('zoom', (ev) => g.attr('transform', ev.transform));
+      svg.call(zoom);
+      fitSvgToGroup(svg, g);
+
+      return { root, group: g, zoom };
+    }
+
+    /*********************
+     * EXPORT PNG & PDF  *
+     *********************/
+    function inlineStyles(svgEl) {
+      const all = svgEl.querySelectorAll('*');
+      all.forEach(el => {
+        const style = getComputedStyle(el);
+        const inline = [];
+        for (const prop of style) inline.push(`${prop}:${style.getPropertyValue(prop)}`);
+        el.setAttribute('style', inline.join(';'));
+      });
+    }
+    async function exportPNG(svgNode, filename='gia-pha.png', scale=2) {
+      const clone = svgNode.cloneNode(true);
+      inlineStyles(clone);
+      const blob = new Blob([new XMLSerializer().serializeToString(clone)], {type: 'image/svg+xml;charset=utf-8'});
+      const url = URL.createObjectURL(blob);
+      const img = new Image();
+      await new Promise((res, rej) => { img.onload = res; img.onerror = rej; img.src = url; });
+      const bbox = svgNode.getBBox();
+      const w = Math.ceil(bbox.width + 80), h = Math.ceil(bbox.height + 80);
+      const canvas = document.createElement('canvas');
+      canvas.width = w * scale; canvas.height = h * scale;
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = '#ffffff'; ctx.fillRect(0,0,canvas.width,canvas.height);
+      ctx.setTransform(scale, 0, 0, scale, 0, 0);
+      ctx.drawImage(img, 0, 0);
+      URL.revokeObjectURL(url);
+      const a = document.createElement('a');
+      a.href = canvas.toDataURL('image/png');
+      a.download = filename;
+      a.click();
+    }
+    async function exportPDF(svgNode, filename='gia-pha.pdf', paper='a3', orientation='landscape', scale=2, margin=8) {
+      const clone = svgNode.cloneNode(true);
+      inlineStyles(clone);
+      const blob = new Blob([new XMLSerializer().serializeToString(clone)], {type: 'image/svg+xml;charset=utf-8'});
+      const url = URL.createObjectURL(blob);
+      const img = new Image();
+      await new Promise((res, rej) => { img.onload = res; img.onerror = rej; img.src = url; });
+
+      const bbox = svgNode.getBBox();
+      const w = Math.ceil(bbox.width + 80), h = Math.ceil(bbox.height + 80);
+
+      const canvas = document.createElement('canvas');
+      canvas.width = w * scale; canvas.height = h * scale;
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = '#ffffff'; ctx.fillRect(0,0,canvas.width,canvas.height);
+      ctx.setTransform(scale, 0, 0, scale, 0, 0);
+      ctx.drawImage(img, 0, 0);
+      URL.revokeObjectURL(url);
+
+      const dataUrl = canvas.toDataURL('image/png');
+      const { jsPDF } = window.jspdf;
+      const pdf = new jsPDF({ orientation, unit: 'mm', format: paper });
+      const pw = pdf.internal.pageSize.getWidth();
+      const ph = pdf.internal.pageSize.getHeight();
+      const dpi = 96;
+      const imgWmm = (canvas.width / dpi) * 25.4;
+      const imgHmm = (canvas.height / dpi) * 25.4;
+      const maxW = pw - margin * 2, maxH = ph - margin * 2;
+      const ratio = Math.min(maxW / imgWmm, maxH / imgHmm);
+      const drawW = imgWmm * ratio, drawH = imgHmm * ratio;
+      const x = (pw - drawW) / 2, y = (ph - drawH) / 2;
+      pdf.addImage(dataUrl, 'PNG', x, y, drawW, drawH);
+      pdf.save(filename);
+    }
+
+    /***********************
+     * KHỞI TẠO & SỰ KIỆN *
+     ***********************/
+    const svg = d3.select('#canvas');
+    let current = { mode: CONFIG.defaultView, api: null, data: null, classif: null };
+
+    async function loadData() {
+      try {
+        const res = await fetch('./data/family.json', { cache: 'no-store' });
+        if (!res.ok) throw new Error('Không tải được dữ liệu');
+        const data = await res.json();
+        return data;
+      } catch (e) {
+        alert('Không tải được dữ liệu: ' + e.message);
+        return { people: [] };
+      }
+    }
+
+    function centerView() {
+      if (!current.api) return;
+      // Reset transform về fit
+      svg.transition().duration(400).call(current.api.zoom.transform, d3.zoomIdentity);
+    }
+
+    function zoomIn() {
+      if (!current.api) return;
+      svg.transition().duration(200).call(current.api.zoom.scaleBy, 1.15);
+    }
+    function zoomOut() {
+      if (!current.api) return;
+      svg.transition().duration(200).call(current.api.zoom.scaleBy, 1/1.15);
+    }
+
+    function render(mode) {
+      const { people } = current.data;
+      const { edges, spouses } = toEdges(people);
+      const classif = computeClassification(people, edges, spouses, CONFIG.rootIds);
+      current.classif = classif;
+      if (mode === 'mindmap') {
+        current.api = renderMindmap(svg, people, edges, spouses, CONFIG, classif);
+      } else {
+        current.api = renderTree(svg, people, edges, spouses, CONFIG, classif);
+      }
+    }
+
+    function selectMode(mode) {
+      current.mode = mode;
+      render(mode);
+      document.getElementById('btnTree').classList.toggle('primary', mode === 'tree');
+      document.getElementById('btnMindmap').classList.toggle('primary', mode === 'mindmap');
+    }
+
+    function searchName(q) {
+      if (!q) return;
+      // Duyệt nodes để tìm
+      const nodes = [];
+      const { people } = current.data;
+      for (const p of people) {
+        if (normalize(p.name).includes(q)) nodes.push(p.id);
+      }
+      if (nodes.length === 0) { alert('Không tìm thấy tên phù hợp.'); return; }
+      // Highlight node đầu
+      // (Đơn giản: đổi stroke node đó một lát)
+      const id = nodes[0];
+      const selection = svg.selectAll('.node').filter(d => d?.data?.id === id);
+      if (!selection.empty()) {
+        selection.select('rect').attr('stroke-width', 4);
+        setTimeout(() => selection.select('rect').attr('stroke-width', 2), 1200);
+      }
+    }
+
+    // Sự kiện UI
+    document.getElementById('btnTree').addEventListener('click', () => selectMode('tree'));
+    document.getElementById('btnMindmap').addEventListener('click', () => selectMode('mindmap'));
+    document.getElementById('btnSearch').addEventListener('click', () => {
+      const q = normalize(document.getElementById('q').value.trim());
+      if (q) searchName(q);
+    });
+    document.getElementById('q').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        const q = normalize(e.currentTarget.value.trim());
+        if (q) searchName(q);
+      }
+    });
+    document.getElementById('btnCenter').addEventListener('click', centerView);
+    document.getElementById('btnZoomIn').addEventListener('click', zoomIn);
+    document.getElementById('btnZoomOut').addEventListener('click', zoomOut);
+    document.getElementById('btnPng').addEventListener('click', () => exportPNG(document.getElementById('canvas')));
+    document.getElementById('btnPdf').addEventListener('click', () => exportPDF(document.getElementById('canvas')));
+
+    // Nút "?" trợ giúp (auto mở lần đầu)
+    window.addEventListener('load', () => {
+      const k = 'help-dismissed';
+      if (!localStorage.getItem(k)) {
+        document.getElementById('help').hidden = false;
+        document.getElementById('help').querySelector('.close').addEventListener('click', () => {
+          localStorage.setItem(k, '1');
+        }, { once: true });
+      }
+    });
+
+    // Khởi chạy
+    (async () => {
+      current.data = await loadData();
+      selectMode(CONFIG.defaultView); // mindmap mặc định
+    })();
+  </script>
+</body>
+</html>
+<!-- Thêm thư viện Supabase -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script>
+  // ====== CẤU HÌNH SUPABASE (điền giá trị của bạn) ======
+  const SUPABASE_URL = 'https://YOUR-PROJECT.supabase.co';
+  const SUPABASE_ANON_KEY = 'YOUR-ANON-KEY'; // an toàn vì RLS kiểm soát
+  const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+  // Thay thế hàm loadData() cũ:
+  async function loadData() {
+    try {
+      // Chỉ lấy dữ liệu công khai
+      const [{ data: people, error: e1 }, { data: edges, error: e2 }, { data: spouses, error: e3 }] = await Promise.all([
+        sb.from('people_public').select('*').order('full_name', { ascending: true }),
+        sb.from('parent_child').select('*'),
+        sb.from('spouses').select('*')
+      ]);
+      if (e1 || e2 || e3) throw e1 || e2 || e3;
+
+      // Map về định dạng viewer đang dùng
+      const mappedPeople = (people || []).map(p => ({
+        id: p.id,
+        name: p.full_name,
+        gender: p.gender === 'M' ? 'M' : p.gender === 'F' ? 'F' : 'U',
+        birth: p.birth_date,   // viewer sẽ hiển thị CHỈ NĂM
+        death: p.death_date,   // viewer đang không hiện ngày/tháng
+        spouses: [],           // sẽ xây từ bảng spouses
+        parents: []            // sẽ xây từ parent_child
+      }));
+
+      const byId = new Map(mappedPeople.map(x => [x.id, x]));
+      (edges || []).forEach(e => { const c = byId.get(e.child_id); if (c) c.parents.push(e.parent_id); });
+      (spouses || []).forEach(s => {
+        const a = byId.get(s.person_a), b = byId.get(s.person_b);
+        if (a && !a.spouses.includes(s.person_b)) a.spouses.push(s.person_b);
+        if (b && !b.spouses.includes(s.person_a)) b.spouses.push(s.person_a);
+      });
+
+      return { people: Array.from(byId.values()) };
+    } catch (err) {
+      alert('Không tải được dữ liệu công khai từ Supabase.');
+      console.error(err);
+      return { people: [] };
+    }
+  }
+</script>
