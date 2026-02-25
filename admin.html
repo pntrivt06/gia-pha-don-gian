@@ -1,1 +1,337 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1"/>
+  <title>Quản trị Gia phả</title>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <style>
+    :root { --fs:18px; --btnh:48px; --r:12px; --gap:12px; }
+    body { margin:0; font-family: system-ui, Segoe UI, Roboto, Arial, sans-serif; font-size: var(--fs); }
+    header { background:#0d47a1; color:#fff; padding:12px 16px; display:flex; justify-content:space-between; align-items:center; }
+    h1 { margin:0; font-size:20px; }
+    .wrap { padding:12px; display:grid; gap:12px; }
+    .row { display:flex; flex-wrap:wrap; gap:12px; align-items:center; }
+    input, select, button, textarea { font-size: var(--fs); height: var(--btnh); padding: 0 12px; border-radius: var(--r); border:1.5px solid #ccc; }
+    textarea { height: 120px; padding: 12px; }
+    button.primary { background:#0d47a1; color:#fff; border-color:#0d47a1; }
+    button.danger { background:#c62828; color:#fff; border-color:#c62828; }
+    .card { border:1px solid #e0e0e0; border-radius:12px; padding:12px; background:#fff; }
+    .grid2 { display:grid; grid-template-columns:1fr; gap:12px; }
+    @media (min-width:900px){ .grid2 { grid-template-columns:1fr 1fr; } }
+    .list .item { display:flex; align-items:center; gap:12px; padding:10px; border-bottom:1px solid #eee; }
+    .item img { width:48px; height:48px; border-radius:50%; object-fit:cover; border:1px solid #ddd; }
+    .item .name { font-weight:700; }
+    .hint { color:#666; font-size:16px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Quản trị Gia phả</h1>
+    <div class="row">
+      <span id="who" class="hint"></span>
+      <button id="btnSignOut" hidden>Đăng xuất</button>
+    </div>
+  </header>
 
+  <div class="wrap">
+    <!-- ĐĂNG NHẬP -->
+    <div id="auth" class="card">
+      <div class="row">
+        <input id="email" placeholder="Email quản trị" />
+        <input id="pass" placeholder="Mật khẩu" type="password" />
+        <button id="btnSignIn" class="primary">Đăng nhập</button>
+      </div>
+      <p class="hint">Chỉ tài khoản có quyền <b>Quản trị</b> mới vào được trang này.</p>
+    </div>
+
+    <!-- BẢNG ĐIỀU KHIỂN ADMIN -->
+    <div id="admin" hidden>
+      <!-- TẠO/SỬA THÀNH VIÊN -->
+      <div class="grid2">
+        <div class="card">
+          <h3>Thành viên</h3>
+          <div class="row">
+            <input id="filter" placeholder="Lọc theo tên..." style="flex:1"/>
+            <button id="btnReload">Tải lại</button>
+          </div>
+          <div id="people" class="list" style="max-height: 60vh; overflow:auto;"></div>
+        </div>
+
+        <div class="card">
+          <h3 id="formTitle">Thêm mới</h3>
+          <div class="row">
+            <input id="full_name" placeholder="Họ và tên" style="flex:1"/>
+            <select id="gender">
+              <option value="M">Nam</option>
+              <option value="F">Nữ</option>
+              <option value="U">Khác</option>
+            </select>
+          </div>
+          <div class="row">
+            <input id="birth_date" type="date" />
+            <input id="death_date" type="date" />
+            <label><input type="checkbox" id="is_published" checked/> Công khai</label>
+          </div>
+          <div class="row">
+            <input id="avatar_url" placeholder="URL ảnh đại diện (nếu có)" style="flex:1"/>
+            <input type="file" id="avatar_file" accept="image/*" />
+            <button id="btnUpload">Tải ảnh</button>
+          </div>
+          <div>
+            <textarea id="notes_public" placeholder="Ghi chú (công khai)"></textarea>
+          </div>
+          <div class="row">
+            <button id="btnSave" class="primary">Lưu</button>
+            <button id="btnReset">Xóa trắng</button>
+            <button id="btnDelete" class="danger" hidden>Xóa</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- QUAN HỆ -->
+      <div class="card">
+        <h3>Quan hệ: Thêm Cha/Mẹ, Con, Vợ/Chồng</h3>
+        <div class="row">
+          <select id="rel_subject" style="min-width:240px"></select>
+          <select id="rel_action">
+            <option value="add_parent">Thêm Cha/Mẹ cho người này</option>
+            <option value="add_child">Thêm Con cho người này</option>
+            <option value="add_spouse">Thêm Vợ/Chồng</option>
+          </select>
+          <input id="rel_target_search" placeholder="Nhập tên người cần liên kết..." style="flex:1"/>
+          <button id="btnRelSearch">Tìm</button>
+        </div>
+        <div id="rel_results" class="list" style="max-height:40vh; overflow:auto;"></div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // ====== CẤU HÌNH SUPABASE (điền giá trị của bạn) ======
+    const SUPABASE_URL = 'https://YOUR-PROJECT.supabase.co';
+    const SUPABASE_ANON_KEY = 'YOUR-ANON-KEY';
+    const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+    // ====== STATE ======
+    let currentUser = null;
+    let isAdmin = false;
+    let editingId = null; // id người đang sửa
+    let cachePeople = []; // cache danh sách để filter nhanh
+
+    // ====== UI HELPERS ======
+    const el = id => document.getElementById(id);
+    const notify = msg => alert(msg);
+
+    function renderPeopleList(list) {
+      const box = el('people');
+      box.innerHTML = '';
+      for (const p of list) {
+        const row = document.createElement('div');
+        row.className = 'item';
+        row.innerHTML = `
+          <img src="${p.avatar_url || 'assets/placeholder-avatar.png'}" alt="">
+          <div style="flex:1">
+            <div class="name">${p.full_name}</div>
+            <div class="hint">${p.birth_date ? (new Date(p.birth_date).getFullYear()) : ''}${p.death_date ? '–'+(new Date(p.death_date).getFullYear()) : ''}</div>
+          </div>
+          <button data-id="${p.id}" class="edit">Sửa</button>
+        `;
+        box.appendChild(row);
+      }
+      // gắn sự kiện Sửa
+      box.querySelectorAll('button.edit').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const id = btn.getAttribute('data-id');
+          const p = cachePeople.find(x => x.id === id);
+          fillForm(p);
+        });
+      });
+    }
+
+    function fillForm(p) {
+      editingId = p?.id || null;
+      el('formTitle').textContent = editingId ? 'Sửa thông tin' : 'Thêm mới';
+      el('full_name').value = p?.full_name || '';
+      el('gender').value = p?.gender || 'U';
+      el('birth_date').value = p?.birth_date || '';
+      el('death_date').value = p?.death_date || '';
+      el('avatar_url').value = p?.avatar_url || '';
+      el('notes_public').value = p?.notes_public || '';
+      el('is_published').checked = p?.is_published ?? true;
+      el('btnDelete').hidden = !editingId;
+    }
+
+    function renderRelSubjectOptions() {
+      const s = el('rel_subject');
+      s.innerHTML = cachePeople.map(p => `<option value="${p.id}">${p.full_name}</option>`).join('');
+    }
+
+    // ====== AUTH ======
+    async function checkAdmin(user) {
+      const { data, error } = await sb.from('user_profiles').select('app_role').eq('user_id', user.id).maybeSingle();
+      if (error) { console.error(error); return false; }
+      return data?.app_role === 'admin';
+    }
+
+    async function signIn() {
+      const email = el('email').value.trim();
+      const password = el('pass').value;
+      const { data, error } = await sb.auth.signInWithPassword({ email, password });
+      if (error) return notify('Đăng nhập thất bại.');
+      currentUser = data.user;
+      isAdmin = await checkAdmin(currentUser);
+      if (!isAdmin) { notify('Tài khoản không có quyền Quản trị.'); await sb.auth.signOut(); return; }
+      el('auth').hidden = true;
+      el('admin').hidden = false;
+      el('btnSignOut').hidden = false;
+      el('who').textContent = email;
+      await reloadAll();
+    }
+
+    async function signOut() {
+      await sb.auth.signOut();
+      currentUser = null; isAdmin = false; editingId = null;
+      el('auth').hidden = false;
+      el('admin').hidden = true;
+      el('btnSignOut').hidden = true;
+      el('who').textContent = '';
+    }
+
+    // ====== CRUD PEOPLE ======
+    async function reloadAll() {
+      const { data, error } = await sb.from('people').select('*').order('full_name', { ascending: true });
+      if (error) { console.error(error); notify('Không tải được danh sách.'); return; }
+      cachePeople = data || [];
+      renderPeopleList(cachePeople);
+      renderRelSubjectOptions();
+    }
+
+    async function savePerson() {
+      const payload = {
+        full_name: el('full_name').value.trim(),
+        gender: el('gender').value,
+        birth_date: el('birth_date').value || null,
+        death_date: el('death_date').value || null,
+        avatar_url: el('avatar_url').value.trim() || null,
+        notes_public: el('notes_public').value.trim() || null,
+        is_published: el('is_published').checked
+      };
+      if (!payload.full_name) return notify('Vui lòng nhập Họ và tên.');
+
+      if (!editingId) {
+        const { error } = await sb.from('people').insert(payload);
+        if (error) { console.error(error); return notify('Không lưu được.'); }
+        notify('Đã thêm.');
+      } else {
+        const { error } = await sb.from('people').update(payload).eq('id', editingId);
+        if (error) { console.error(error); return notify('Không cập nhật được.'); }
+        notify('Đã lưu.');
+      }
+      editingId = null; fillForm(null);
+      await reloadAll();
+    }
+
+    async function deletePerson() {
+      if (!editingId) return;
+      if (!confirm('Bạn chắc chắn muốn xóa? Hành động không thể hoàn tác.')) return;
+      const { error } = await sb.from('people').delete().eq('id', editingId);
+      if (error) { console.error(error); return notify('Không xóa được.'); }
+      notify('Đã xóa.');
+      editingId = null; fillForm(null);
+      await reloadAll();
+    }
+
+    // ====== UPLOAD AVATAR (Supabase Storage: avatars) ======
+    async function uploadAvatar() {
+      const f = el('avatar_file').files[0];
+      if (!f) return notify('Chọn ảnh trước.');
+      const fileName = `${Date.now()}_${f.name.replace(/\s+/g,'_')}`;
+      const { data, error } = await sb.storage.from('avatars').upload(fileName, f, { upsert: false });
+      if (error) { console.error(error); return notify('Tải ảnh thất bại.'); }
+      const { data: pub } = sb.storage.from('avatars').getPublicUrl(data.path);
+      el('avatar_url').value = pub.publicUrl;
+      notify('Đã tải ảnh.');
+    }
+
+    // ====== QUAN HỆ ======
+    async function searchTarget() {
+      const q = el('rel_target_search').value.trim().toLowerCase();
+      const items = cachePeople.filter(p => p.full_name.toLowerCase().includes(q));
+      const box = el('rel_results');
+      box.innerHTML = '';
+      for (const p of items) {
+        const row = document.createElement('div');
+        row.className = 'item';
+        row.innerHTML = `
+          <img src="${p.avatar_url || 'assets/placeholder-avatar.png'}">
+          <div style="flex:1">
+            <div class="name">${p.full_name}</div>
+            <div class="hint">${p.birth_date ? (new Date(p.birth_date).getFullYear()) : ''}</div>
+          </div>
+          <button data-id="${p.id}">Chọn</button>
+        `;
+        row.querySelector('button').addEventListener('click', () => addRelation(p.id));
+        box.appendChild(row);
+      }
+    }
+
+    async function addRelation(targetId) {
+      const subjectId = el('rel_subject').value;
+      const action = el('rel_action').value;
+
+      if (action === 'add_parent') {
+        // target = cha/mẹ của subject
+        const { error } = await sb.from('parent_child').insert({ parent_id: targetId, child_id: subjectId, relation: 'biological' });
+        if (error) { console.error(error); return notify('Không thêm được cha/mẹ.'); }
+        notify('Đã thêm Cha/Mẹ.');
+      } else if (action === 'add_child') {
+        // target = con của subject
+        const { error } = await sb.from('parent_child').insert({ parent_id: subjectId, child_id: targetId, relation: 'biological' });
+        if (error) { console.error(error); return notify('Không thêm được con.'); }
+        notify('Đã thêm Con.');
+      } else if (action === 'add_spouse') {
+        // tạo cặp vợ/chồng
+        // để tránh trùng lặp: thử cả (a,b) & (b,a)
+        const { data: exists, error: e1 } = await sb.from('spouses')
+          .select('id').or(`and(person_a.eq.${subjectId},person_b.eq.${targetId}),and(person_a.eq.${targetId},person_b.eq.${subjectId})`);
+        if (e1) { console.error(e1); return notify('Lỗi kiểm tra trùng.'); }
+        if (exists && exists.length) return notify('Đã có quan hệ vợ/chồng.');
+        const { error } = await sb.from('spouses').insert({ person_a: subjectId, person_b: targetId });
+        if (error) { console.error(error); return notify('Không thêm được vợ/chồng.'); }
+        notify('Đã thêm Vợ/Chồng.');
+      }
+      el('rel_results').innerHTML = '';
+    }
+
+    // ====== SỰ KIỆN ======
+    el('btnSignIn').addEventListener('click', signIn);
+    el('btnSignOut').addEventListener('click', signOut);
+    el('btnReload').addEventListener('click', reloadAll);
+    el('filter').addEventListener('input', (e) => {
+      const q = e.target.value.toLowerCase().trim();
+      renderPeopleList(cachePeople.filter(p => p.full_name.toLowerCase().includes(q)));
+    });
+    el('btnSave').addEventListener('click', savePerson);
+    el('btnReset').addEventListener('click', () => { editingId = null; fillForm(null); });
+    el('btnDelete').addEventListener('click', deletePerson);
+    el('btnUpload').addEventListener('click', uploadAvatar);
+
+    el('btnRelSearch').addEventListener('click', searchTarget);
+
+    // Auto check session
+    (async () => {
+      const { data: { session } } = await sb.auth.getSession();
+      if (session?.user) {
+        currentUser = session.user;
+        isAdmin = await checkAdmin(currentUser);
+        if (isAdmin) {
+          el('auth').hidden = true; el('admin').hidden = false; el('btnSignOut').hidden = false;
+          el('who').textContent = currentUser.email || '';
+          await reloadAll();
+        }
+      }
+    })();
+  </script>
+</body>
+</html>
