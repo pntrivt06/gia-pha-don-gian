@@ -2,12 +2,14 @@
 <html lang="vi">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
+  <meta name="viewport"
+        content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
   <title>Gia phả - Chế độ đơn giản</title>
 
-  <!-- D3.js & jsPDF (CDN) -->
+  <!-- Thư viện: D3.js, jsPDF, Supabase -->
   <script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
   <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 
   <style>
     :root {
@@ -18,7 +20,7 @@
       --primary: #0d47a1;
       --male: #1976d2;
       --female: #d81b60;
-      --spouse-in: #6a1b9a; /* dâu */
+      --spouse-in: #6a1b9a;  /* dâu */
       --spouse-out: #e65100; /* rể */
       --deceased: #616161;
       --border: #e0e0e0;
@@ -47,7 +49,6 @@
       border: 1.5px solid #ccc; padding: 0 14px; background: #fff; color: var(--text);
     }
     button.primary { background: var(--primary); color: #fff; border-color: var(--primary); }
-    button.danger { background: #c62828; color: #fff; border-color: #c62828; }
     input { min-width: 260px; flex: 1; }
     .wrap { height: calc(100dvh - 140px); position: relative; overflow: hidden; background: #fff; }
     svg#canvas { width: 100%; height: 100%; touch-action: none; display: block; }
@@ -59,9 +60,7 @@
     }
     .node .name { font-weight: 700; font-size: 16px; }
     .node .meta { fill: var(--muted); font-size: 14px; }
-    .badge {
-      font-size: 12px; fill: #fff;
-    }
+    .badge { font-size: 12px; fill: #fff; }
 
     /* Legend & helper text */
     .legend {
@@ -70,7 +69,7 @@
     }
     .dot { display: inline-block; width: 14px; height: 14px; border-radius: 3px; margin-right: 6px; }
 
-    /* Bottom help (“?”) */
+    /* “?” Hướng dẫn */
     .help {
       position: fixed; right: 12px; bottom: 12px; z-index: 15;
       background: #fff; border: 1px solid var(--border); border-radius: 12px; padding: 12px; font-size: 16px;
@@ -82,8 +81,10 @@
     .help .close { position: absolute; top: 6px; right: 10px; border: none; background: transparent; font-size: 22px; }
 
     @media (min-width: 900px) {
-      body { font-size: 18px; }
       header h1 { font-size: 22px; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      * { animation: none !important; transition: none !important; }
     }
   </style>
 </head>
@@ -116,6 +117,7 @@
     <span><span class="dot" style="background: var(--spouse-in)"></span>Dâu</span>
     <span><span class="dot" style="background: var(--spouse-out)"></span>Rể</span>
     <span><span class="dot" style="background: var(--deceased)"></span>Đã mất</span>
+    <button id="btnHelp" style="margin-left:auto; height:36px;">?</button>
   </div>
 
   <div id="help" class="help" hidden>
@@ -128,16 +130,24 @@
 
   <script>
     /*******************
-     * CẤU HÌNH NHANH *
+     * CẤU HÌNH NHANH  *
      *******************/
     const CONFIG = {
-      defaultView: 'mindmap',      // 'mindmap' | 'tree'
+      defaultView: 'mindmap',      // 'mindmap' | 'tree' (mindmap mặc định)
       showOnlyBirthYear: true,     // chỉ hiển thị năm sinh (công khai)
-      rootIds: null,               // mảng id gốc huyết thống (nếu null sẽ tự tìm người không có cha/mẹ)
+      rootIds: null,               // mảng id gốc huyết thống (nếu null: tự tìm người không có cha/mẹ)
       node: { w: 210, h: 64 },
-      spacing: { dx: 90, dy: 260 }, // dùng cho Tree
-      radial: { radiusStep: 110 }  // dùng cho Mindmap
+      spacing: { dx: 90, dy: 260 }, // layout cho Tree
+      radial: { radiusStep: 110 }   // layout cho Mindmap
     };
+
+    /**********************
+     * SUPABASE - CẤU HÌNH
+     **********************/
+    // ⚠️ Thay 2 dòng dưới bằng dự án của bạn
+    const SUPABASE_URL = 'https://YOUR-PROJECT.supabase.co';
+    const SUPABASE_ANON_KEY = 'YOUR-ANON-KEY';
+    const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
     /**************
      * TIỆN ÍCH   *
@@ -159,16 +169,15 @@
 
     function computeClassification(people, edges, spouses, rootIds) {
       const byId = new Map(people.map(p => [p.id, p]));
-      const children = new Map();
-      const parents = new Map();
+      const children = new Map(), parents = new Map();
       edges.forEach(e => {
         (children.get(e.parent_id) ?? children.set(e.parent_id, []).get(e.parent_id)).push(e.child_id);
         (parents.get(e.child_id) ?? parents.set(e.child_id, []).get(e.child_id)).push(e.parent_id);
       });
-      // roots: không có cha/mẹ
+
       let roots = rootIds && rootIds.length ? rootIds : people.filter(p => !parents.has(p.id)).map(p => p.id);
 
-      // BFS để lấy tập huyết thống (inBloodline)
+      // BFS: tập huyết thống
       const inBlood = new Set();
       const q = [...roots];
       while (q.length) {
@@ -208,24 +217,6 @@
       return { inBlood, label, parents, children };
     }
 
-    function toEdges(people) {
-      // Từ people[].parents tạo edge parent_child
-      const edges = [];
-      for (const p of people) {
-        for (const pid of (p.parents || [])) edges.push({ parent_id: pid, child_id: p.id });
-      }
-      // spouses: cặp (song phương)
-      const sp = [];
-      const seen = new Set();
-      for (const p of people) {
-        for (const s of (p.spouses || [])) {
-          const a = p.id, b = s, k = a < b ? a + '|' + b : b + '|' + a;
-          if (!seen.has(k)) { seen.add(k); sp.push({ person_a: a, person_b: b }); }
-        }
-      }
-      return { edges, spouses: sp };
-    }
-
     function buildTreeData(people, edges) {
       const byId = new Map(people.map(p => [p.id, p]));
       const children = new Map();
@@ -251,7 +242,6 @@
     }
 
     function buildRadialHierarchy(treeData) {
-      // D3 expects hierarchy
       return d3.hierarchy(treeData, d => d.children);
     }
 
@@ -269,7 +259,6 @@
       const tree = d3.tree().size([2 * Math.PI, (root.height + 2) * radiusStep]);
       tree(root);
 
-      // convert to x,y
       const point = (d) => {
         const r = d.y, a = d.x - Math.PI / 2;
         return [Math.cos(a) * r, Math.sin(a) * r];
@@ -298,11 +287,9 @@
         })
         .attr('class', 'node');
 
-      // color border by gender
       const borderColor = (d) => d.data.gender === 'F' ? 'var(--female)' : d.data.gender === 'M' ? 'var(--male)' : '#455a64';
-      const labelKind = (id) => classification.label.get(id); // 'dau'|'re'|'dead'|undefined
+      const labelKind = (id) => classification.label.get(id);
 
-      // draw rect centered
       nodes.append('rect')
         .attr('x', -node.w / 2)
         .attr('y', -node.h / 2)
@@ -321,12 +308,8 @@
         .attr('class', 'meta')
         .attr('text-anchor', 'middle')
         .attr('dy', 16)
-        .text(d => {
-          // Chỉ hiển thị NĂM SINH cho công khai
-          return CONFIG.showOnlyBirthYear ? year(d.data.birth) : year(d.data.birth);
-        });
+        .text(d => CONFIG.showOnlyBirthYear ? year(d.data.birth) : year(d.data.birth));
 
-      // badge
       nodes.append('rect')
         .filter(d => !!labelKind(d.data.id))
         .attr('x', node.w / 2 - 50)
@@ -364,7 +347,6 @@
     function renderTree(svg, people, edges, spouses, options, classification) {
       svg.selectAll('*').remove();
       const g = svg.append('g').attr('transform', 'translate(40,40)');
-      const { node } = options;
 
       const root = d3.hierarchy(buildTreeData(people, edges), d => d.children);
       const treeLayout = d3.tree().nodeSize([CONFIG.spacing.dx, CONFIG.spacing.dy]);
@@ -512,42 +494,65 @@
       pdf.save(filename);
     }
 
+    /*************************
+     * TẢI DỮ LIỆU (Supabase) *
+     *************************/
+    async function loadDataFromSupabase() {
+      try {
+        const [ppl, edges, spos] = await Promise.all([
+          sb.from('people_public').select('*').order('full_name', { ascending: true }),
+          sb.from('parent_child').select('*'),
+          sb.from('spouses').select('*')
+        ]);
+        if (ppl.error || edges.error || spos.error) throw (ppl.error || edges.error || spos.error);
+
+        // Map về định dạng người cho viewer
+        const mappedPeople = (ppl.data || []).map(p => ({
+          id: p.id,
+          name: p.full_name,
+          gender: p.gender === 'M' ? 'M' : p.gender === 'F' ? 'F' : 'U',
+          birth: p.birth_date,
+          death: p.death_date,  // badge "Đã mất" dùng thuộc tính này, viewer không hiển thị năm mất
+          spouses: [],
+          parents: []
+        }));
+
+        // Bổ sung parents & spouses cho cấu trúc people (phục vụ một số tính năng)
+        const byId = new Map(mappedPeople.map(x => [x.id, x]));
+        (edges.data || []).forEach(e => { const c = byId.get(e.child_id); if (c) c.parents.pushforEach(s => {
+          const a = byId.get(s.person_a), b = byId.get(s.person_b);
+          if (a && !a.spouses.includes(s.person_b)) a.spouses.push(s.person_b);
+          if (b && !b.spouses.includes(s.person_a)) b.spouses.push(s.person_a);
+        });
+
+        return {
+          people: Array.from(byId.values()),
+          edges: (edges.data || []).map(e => ({ parent_id: e.parent_id, child_id: e.child_id })),
+          spouses: (spos.data || []).map(s => ({ person_a: s.person_a, person_b: s.person_b }))
+        };
+      } catch (err) {
+        alert('Không tải được dữ liệu công khai từ Supabase.');
+        console.error(err);
+        return { people: [], edges: [], spouses: [] };
+      }
+    }
+
     /***********************
      * KHỞI TẠO & SỰ KIỆN *
      ***********************/
     const svg = d3.select('#canvas');
     let current = { mode: CONFIG.defaultView, api: null, data: null, classif: null };
 
-    async function loadData() {
-      try {
-        const res = await fetch('./data/family.json', { cache: 'no-store' });
-        if (!res.ok) throw new Error('Không tải được dữ liệu');
-        const data = await res.json();
-        return data;
-      } catch (e) {
-        alert('Không tải được dữ liệu: ' + e.message);
-        return { people: [] };
-      }
-    }
-
     function centerView() {
       if (!current.api) return;
-      // Reset transform về fit
-      svg.transition().duration(400).call(current.api.zoom.transform, d3.zoomIdentity);
+      // Reset transform về mặc định (fit lại sau)
+      svg.transition().duration(350).call(current.api.zoom.transform, d3.zoomIdentity);
     }
-
-    function zoomIn() {
-      if (!current.api) return;
-      svg.transition().duration(200).call(current.api.zoom.scaleBy, 1.15);
-    }
-    function zoomOut() {
-      if (!current.api) return;
-      svg.transition().duration(200).call(current.api.zoom.scaleBy, 1/1.15);
-    }
+    function zoomIn()  { if (current.api) svg.transition().duration(200).call(current.api.zoom.scaleBy, 1.15); }
+    function zoomOut() { if (current.api) svg.transition().duration(200).call(current.api.zoom.scaleBy, 1/1.15); }
 
     function render(mode) {
-      const { people } = current.data;
-      const { edges, spouses } = toEdges(people);
+      const { people, edges, spouses } = current.data;
       const classif = computeClassification(people, edges, spouses, CONFIG.rootIds);
       current.classif = classif;
       if (mode === 'mindmap') {
@@ -566,16 +571,10 @@
 
     function searchName(q) {
       if (!q) return;
-      // Duyệt nodes để tìm
-      const nodes = [];
-      const { people } = current.data;
-      for (const p of people) {
-        if (normalize(p.name).includes(q)) nodes.push(p.id);
-      }
-      if (nodes.length === 0) { alert('Không tìm thấy tên phù hợp.'); return; }
-      // Highlight node đầu
-      // (Đơn giản: đổi stroke node đó một lát)
-      const id = nodes[0];
+      const ids = current.data.people.filter(p => normalize(p.name).includes(q)).map(p => p.id);
+      if (ids.length === 0) { alert('Không tìm thấy tên phù hợp.'); return; }
+      // Highlight node đầu tiên
+      const id = ids[0];
       const selection = svg.selectAll('.node').filter(d => d?.data?.id === id);
       if (!selection.empty()) {
         selection.select('rect').attr('stroke-width', 4);
@@ -583,7 +582,7 @@
       }
     }
 
-    // Sự kiện UI
+    // Gắn sự kiện UI
     document.getElementById('btnTree').addEventListener('click', () => selectMode('tree'));
     document.getElementById('btnMindmap').addEventListener('click', () => selectMode('mindmap'));
     document.getElementById('btnSearch').addEventListener('click', () => {
@@ -601,8 +600,9 @@
     document.getElementById('btnZoomOut').addEventListener('click', zoomOut);
     document.getElementById('btnPng').addEventListener('click', () => exportPNG(document.getElementById('canvas')));
     document.getElementById('btnPdf').addEventListener('click', () => exportPDF(document.getElementById('canvas')));
+    document.getElementById('btnHelp').addEventListener('click', () => document.getElementById('help').hidden = false);
 
-    // Nút "?" trợ giúp (auto mở lần đầu)
+    // Mở "Hướng dẫn" lần đầu
     window.addEventListener('load', () => {
       const k = 'help-dismissed';
       if (!localStorage.getItem(k)) {
@@ -615,55 +615,9 @@
 
     // Khởi chạy
     (async () => {
-      current.data = await loadData();
+      current.data = await loadDataFromSupabase();
       selectMode(CONFIG.defaultView); // mindmap mặc định
     })();
   </script>
 </body>
 </html>
-<!-- Thêm thư viện Supabase -->
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-<script>
-  // ====== CẤU HÌNH SUPABASE (điền giá trị của bạn) ======
-  const SUPABASE_URL = 'https://YOUR-PROJECT.supabase.co';
-  const SUPABASE_ANON_KEY = 'YOUR-ANON-KEY'; // an toàn vì RLS kiểm soát
-  const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-
-  // Thay thế hàm loadData() cũ:
-  async function loadData() {
-    try {
-      // Chỉ lấy dữ liệu công khai
-      const [{ data: people, error: e1 }, { data: edges, error: e2 }, { data: spouses, error: e3 }] = await Promise.all([
-        sb.from('people_public').select('*').order('full_name', { ascending: true }),
-        sb.from('parent_child').select('*'),
-        sb.from('spouses').select('*')
-      ]);
-      if (e1 || e2 || e3) throw e1 || e2 || e3;
-
-      // Map về định dạng viewer đang dùng
-      const mappedPeople = (people || []).map(p => ({
-        id: p.id,
-        name: p.full_name,
-        gender: p.gender === 'M' ? 'M' : p.gender === 'F' ? 'F' : 'U',
-        birth: p.birth_date,   // viewer sẽ hiển thị CHỈ NĂM
-        death: p.death_date,   // viewer đang không hiện ngày/tháng
-        spouses: [],           // sẽ xây từ bảng spouses
-        parents: []            // sẽ xây từ parent_child
-      }));
-
-      const byId = new Map(mappedPeople.map(x => [x.id, x]));
-      (edges || []).forEach(e => { const c = byId.get(e.child_id); if (c) c.parents.push(e.parent_id); });
-      (spouses || []).forEach(s => {
-        const a = byId.get(s.person_a), b = byId.get(s.person_b);
-        if (a && !a.spouses.includes(s.person_b)) a.spouses.push(s.person_b);
-        if (b && !b.spouses.includes(s.person_a)) b.spouses.push(s.person_a);
-      });
-
-      return { people: Array.from(byId.values()) };
-    } catch (err) {
-      alert('Không tải được dữ liệu công khai từ Supabase.');
-      console.error(err);
-      return { people: [] };
-    }
-  }
-</script>
